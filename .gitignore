@@ -1,0 +1,8 @@
+# DataSpell project configuration
+.idea/*
+
+# Jupyter Notebook checkpoints
+*.ipynb_checkpoints
+
+# everithing inside any data folder
+**/data/**
