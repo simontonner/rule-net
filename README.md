@@ -7,6 +7,20 @@ The architecture is based on the work ["Learning and Memorization" by Satrajit
 
 This project builds on both implementations and investigates whether individual LUT nodes can be effectively replaced by rule-based classifiers. It uses RIPPER for logic rule extraction.
 
+
+## Dataset
+
+The experiments are based on a binary version of the MNIST dataset. Download these files from [LeCun's website](http://yann.lecun.com/exdb/mnist/),
+extract them and put them in a folder called `data/mnist`:
+
+- [train-images-idx3-ubyte.gz](http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz)
+- [train-labels-idx1-ubyte.gz](http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz)
+- [t10k-images-idx3-ubyte.gz](http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz)
+- [t10k-labels-idx1-ubyte.gz](http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz)
+
+REVIEW THIS
+
+
 ## Licence & Copyright
 
 © 2025, Simon Tonner
