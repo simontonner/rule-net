@@ -5,48 +5,35 @@ Fast majority-vote LUT node with optional random tie-breaking.
 
 from __future__ import annotations
 import numpy as np
-from numpy.random import Generator
 from .deep_binary_classifier import BaseNode
 
 
-# --------------------------------------------------------------------- #
-def truth_table_indices(bits_bool: np.ndarray) -> np.ndarray:
+def truth_table_indices(bits_bool: np.ndarray) -> np.Fndarray:
     """Boolean patterns ➜ integer indices (big-endian)."""
     weights = 1 << np.arange(bits_bool.shape[1] - 1, -1, -1, dtype=np.uint32)
     return (bits_bool.astype(np.uint32) * weights).sum(axis=1).astype(np.int64)
 
 
 class LutNode(BaseNode):
-    def __init__(
-            self,
-            X_bits:   np.ndarray,
-            y_pm1:    np.ndarray,
-            bits:     int,
-            cols:     np.ndarray,
-            rng:      Generator,
-            tie_break:str = "random",
-    ):
-        super().__init__(bits, cols)
+    def __init__(self, X_cols: np.ndarray, X_node: np.ndarray, y_node: np.ndarray, seed: int):
+        super().__init__(X_cols)
 
-        idxs  = truth_table_indices(X_bits)
-        votes = np.bincount(idxs, weights=y_pm1, minlength=2**bits)
+        rng = np.random.default_rng(seed)
 
-        if tie_break == "random":
-            ties       = votes == 0
-            votes[ties] = rng.choice([-1, 1], size=ties.sum())
-        elif tie_break != "zero":
-            raise ValueError("tie_break must be 'random' or 'zero'")
+        y_pm1     = y_node.astype(np.int8) * 2 - 1
 
-        self.lut = votes > 0            # bool LUT
+        idxs  = truth_table_indices(X_node)
+        num_bits = X_node.shape[1]
+        votes = np.bincount(idxs, weights=y_pm1, minlength=2**num_bits)
 
-    # --------------------------------------------------------------- #
+        ties        = votes == 0
+        votes[ties] = rng.choice([-1, 1], size=ties.sum())
+
+        self.lut = votes > 0  # bool LUT
+
     def __call__(self, X: np.ndarray) -> np.ndarray:
-        return self.lut[truth_table_indices(X[:, self.cols])]
+        return self.lut[truth_table_indices(X[:, self.X_cols])]
 
 
-# ------------------------------------------------------------------ #
-def make_lut_node(
-        X_bits, y_pm1, bits, cols, rng, tie_break, **unused
-) -> LutNode:
-    """Factory helper matching the required signature."""
-    return LutNode(X_bits, y_pm1, bits, cols, rng, tie_break)
+def make_lut_node(X_cols: np.ndarray, X_node: np.ndarray, y_node: np.ndarray, seed: int) -> LutNode:
+    return LutNode(X_cols, X_node, y_node, seed)
