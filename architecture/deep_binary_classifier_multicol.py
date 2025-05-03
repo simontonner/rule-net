@@ -73,26 +73,25 @@ class DeepBinaryClassifier:
             layer_bit_count: int,
             jobs: int | None
     ) -> List[BaseNode]:
-        node_seeds = self._rng.integers(0, 2 ** 32 - 1, size=layer_node_count, dtype=np.uint64)
+        cols_arr = self._rng.choice(X.shape[1], size=(layer_node_count, layer_bit_count), replace=True)
+        seeds    = self._rng.integers(0, 2 ** 32 - 1, size=layer_node_count, dtype=np.uint64)
 
         if jobs in (None, 1):
             nodes: List[BaseNode] = []
-            for node_seed in node_seeds:
-                X_cols = self._rng.choice(X.shape[1], size=layer_bit_count, replace=False)
-                node = self.node_factory(X_cols, X[:, X_cols], y, int(node_seed))
+            for X_cols, seed in zip(cols_arr, seeds):
+                node = self.node_factory( X_cols, X[:, X_cols], y, int(seed))
                 nodes.append(node)
             return nodes
 
         with ProcessPoolExecutor(self.jobs) as ex:
             futures = []
-            for node_seed in node_seeds:
-                X_cols = self._rng.choice(X.shape[1], size=layer_bit_count, replace=False)
-                future = ex.submit(self.node_factory, X_cols, X[:, X_cols], y, int(node_seed))
+            for X_cols, seed in zip(cols_arr, seeds):
+                future = ex.submit(self.node_factory, X_cols, X[:, X_cols], y, int(seed))
                 futures.append(future)
 
-            # first we start all the workers and then we await the result of each task
-            nodes = [future.result() for future in futures]
-            return nodes
+                # first we start all the workers and then we await the result of each task
+                nodes = [future.result() for future in futures]
+                return nodes
 
     def fit(self, X: np.ndarray, y: np.ndarray) -> "DeepBinaryClassifier":
         """
