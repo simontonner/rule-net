@@ -4,5 +4,5 @@
 # Jupyter Notebook checkpoints
 *.ipynb_checkpoints
 
-# everithing inside any data folder
-**/data/**
+# exclude the raw mnsit files
+**/data/mnist/*.gz
