@@ -38,6 +38,7 @@ class RipperNode(BaseNode):
 
         # store the ruleset for later use
         self.ruleset = ripper.ruleset_
+        self.ripper = ripper
 
         # the new rule might rely on fewer columns
         names = ripper.selected_features_
@@ -71,6 +72,9 @@ class RipperNode(BaseNode):
         :param disjunction_str: Allows to specify a different disjunction string for nicer formatting.
         :return: String representation of the ruleset
         """
+        if len(self.ruleset) == 0:
+            return "No rules found! Defaulting to False for every input."
+
         rule_str = disjunction_str.join(str(rule) for rule in self.ruleset)
         return rule_str
 

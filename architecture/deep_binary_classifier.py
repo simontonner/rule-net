@@ -87,6 +87,7 @@ class DeepBinaryClassifier:
             futures = []
             for node_seed in node_seeds:
                 X_cols = self._rng.choice(X.shape[1], size=layer_bit_count, replace=False)
+                # we filter the X columns here to avoid passing the full X into each thread
                 future = ex.submit(self.node_factory, X_cols, X[:, X_cols], y, int(node_seed))
                 futures.append(future)
 
