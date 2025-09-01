@@ -6,3 +6,6 @@
 
 # exclude the raw mnsit files
 **/data/mnist/*.gz
+
+# exclude unmodularized/data folder and subitems folders
+**/unmodularized/data/**
