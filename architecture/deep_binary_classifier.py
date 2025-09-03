@@ -83,6 +83,7 @@ class DeepBinaryClassifier:
                 nodes.append(node)
             return nodes
 
+        # doing _rng.choice and ex.submit repeatedly is not ideal, but there seems to be no performance loss
         with ProcessPoolExecutor(self.jobs) as ex:
             futures = []
             for node_seed in node_seeds:
