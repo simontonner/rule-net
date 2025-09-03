@@ -11,9 +11,9 @@ class LutNode(BaseNode):
 
         Uses random predictions for unseen bit-patterns or voting ties.
 
-        :param X_cols: The columns of the input data that this node uses, shape (num_bits,)
+        :param X_cols: The indices referencing the original columns of the dataset, shape (num_bits,)
         :param X_node: The input data for this node, shape (N, num_bits)
-        :param y_node: The target data for this node, shape (N,)
+        :param y_node: The target labels for this node, shape (N,)
         :param seed: Random seed for reproducibility
         """
         super().__init__(X_cols)
@@ -30,7 +30,7 @@ class LutNode(BaseNode):
         mask = votes == 0
         votes[mask] = rng.choice([-1, 1], size=mask.sum())
 
-        # since each node is small, we store the prediction for each possible bit-pattern
+        # since each node is small, we can store a prediction for each possible bit-pattern
         self.pred_node = votes > 0
 
     def __call__(self, X: np.ndarray) -> np.ndarray:

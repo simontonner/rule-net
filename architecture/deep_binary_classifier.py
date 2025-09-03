@@ -17,7 +17,7 @@ class BaseNode(ABC):
     @abstractmethod
     def __call__(self, X: np.ndarray) -> np.ndarray:
         """
-        Chooses the right columns from the input data and returns the predictions.
+        Returns predictions for the given input data.
 
         :param X: The input data, shape (N, num_bits)
         :return: The predictions, shape (N,)
@@ -35,7 +35,7 @@ class DeepBinaryClassifier:
             jobs: int | None = None,
     ):
         """
-        Initializes a feed-forward Boolean network composed of layers of binary nodes.
+        A feed-forward Boolean network composed of layers of binary nodes.
 
         Each node is constructed from randomly selected input bits and trained independently.
         Layers are trained sequentially, and multiprocessing is optionally used for node creation within each layer.
@@ -61,8 +61,8 @@ class DeepBinaryClassifier:
         self.layer_bit_counts  = list(layer_bit_counts)
 
         self.node_factory = node_factory
-        self._rng         = np.random.default_rng(seed)
-        self.jobs       = jobs
+        self._rng = np.random.default_rng(seed)
+        self.jobs = jobs
         self.layers: List[List[BaseNode]] = []
 
     def _build_layer(

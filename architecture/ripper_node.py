@@ -6,24 +6,17 @@ from .deep_binary_classifier import BaseNode
 from .utils import truth_table_indices, truth_table_patterns
 
 class RipperNode(BaseNode):
-    """
-    RIPPER-based lookup node.
+    def __init__(self, X_cols: np.ndarray, X_node: np.ndarray, y_node: np.ndarray, seed: int):
+        """
+        RIPPER-based lookup node.
 
-    Trains a RIPPER rule set on the node's subfeatures, then
-    materializes a full truth table for predictions.
+        Trains a RIPPER rule set on the given input data.
 
-    :param X_cols: Indices of the input features used by this node
-    :param X_node: Training inputs for this node, shape (N, num_bits)
-    :param y_node: Binary training targets, shape (N,)
-    :param seed: RNG seed for reproducibility
-    """
-    def __init__(
-            self,
-            X_cols: np.ndarray,
-            X_node: np.ndarray,
-            y_node: np.ndarray,
-            seed: int
-    ):
+        :param X_cols: The indices referencing the original columns of the dataset, shape (num_bits,)
+        :param X_node: The input data for this node, shape (N, num_bits)
+        :param y_node: The target labels for this node, shape (N,)
+        :param seed: Random seed for reproducibility
+        """
         super().__init__(X_cols)
 
         self.seed = seed
@@ -49,7 +42,7 @@ class RipperNode(BaseNode):
         pat_df = pd.DataFrame(patterns, columns=names)
         pred = ripper.predict(pat_df)
 
-        # since each node is small, we store the prediction for each possible bit-pattern instead of invoking RIPPER
+        # since each node is small, we can store a prediction for each possible bit-pattern
         self.pred_node = np.asarray(pred, dtype=bool)
 
     def __call__(self, X: np.ndarray) -> np.ndarray:
