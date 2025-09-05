@@ -90,17 +90,25 @@ class RipperNodeReduced(BaseNode):
 
     def _update_from_expr(self):
         """
-        Updates X_cols and the truth-table predictions from the current expression.
+        Updates X_cols, feature_names, and the truth-table predictions
+        from the current expression.
         """
         if not self.expr:
             self.X_cols = np.array([], dtype=int)
+            self.feature_names = []
             self.pred_node = np.array([], dtype=bool)
             return
 
         # Extract used features from the expression
         used_syms = sorted([str(s) for s in self.expr.free_symbols])
+
+        # Map back to original indices
         name_to_idx = {nm: i for i, nm in enumerate(self.feature_names)}
-        self.X_cols = np.array([name_to_idx[nm] for nm in used_syms], dtype=int)
+        used_idxs = [name_to_idx[nm] for nm in used_syms]
+
+        # Update X_cols and feature_names to the reduced set
+        self.X_cols = np.array(used_idxs, dtype=int)
+        self.feature_names = used_syms  # now only the used ones
 
         # Precompute truth table predictions
         syms = [symbols(nm) for nm in used_syms]
@@ -111,6 +119,7 @@ class RipperNodeReduced(BaseNode):
         else:
             pred = np.full(2 ** len(self.X_cols), bool(self.expr))
         self.pred_node = np.asarray(pred, dtype=bool)
+
 
     @staticmethod
     def ruleset_to_expr(ruleset):
