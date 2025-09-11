@@ -220,4 +220,6 @@ class DeepBinaryClassifier:
         # Rebuild wiring once from names -> indices
         self._rebuild_all_wiring()
 
+        # Update counts
+        self.layer_node_counts = [len(L) for L in self.layers]
         return self

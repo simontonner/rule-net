@@ -244,7 +244,7 @@ class DeepBinaryClassifier:
             # Build indices from CURRENT node deps (subset/order after reduction)
             prev_map = self._name_to_idx(self.layer_feature_names[li])  # previous boundary
             idxs = [
-                np.array([prev_map[n] for n in nodes[j].input_names], dtype=int)
+                np.array([prev_map[n] for n in nodes[j].network_input_names], dtype=int)
                 for j in range(len(nodes))
             ]
             self.wiring_indices.append(idxs)
