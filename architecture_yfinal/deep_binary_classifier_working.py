@@ -1,3 +1,7 @@
+# deep_binary_classifier.py
+# Name-based wiring with strict L0 invariants and robust pruning.
+# Internally we store only INDICES for wiring; names exist for BinaryNode ctor & display.
+
 from __future__ import annotations
 from typing import Sequence, Callable, List
 from abc import ABC, abstractmethod
@@ -48,7 +52,7 @@ class DeepBinaryClassifier:
             self,
             layer_node_counts: Sequence[int],
             layer_bit_counts: Sequence[int],
-            node_factory: Callable[..., "BinaryNode"],
+            node_factory: Callable[..., "BinaryNode"],  # (name, input_names, X_subset, y, seed) -> BinaryNode
             seed: int | None = None,
             jobs: int | None = None,
     ):
@@ -199,88 +203,52 @@ class DeepBinaryClassifier:
 
     def prune(self, verbose: bool = True) -> "DeepBinaryClassifier":
         """
-        Index-based pruning with strict L0 invariants and correct next-layer remapping.
+        Index-based pruning with strict L0 invariants.
         - Seed with all final-layer nodes.
-        - Backward reachability over wiring_indices to find survivors.
-        - Slice layers + boundary names + boundary wiring.
-        - Remap ONLY the next layer's survivors' parent indices to the compacted boundary.
+        - Walk wiring_indices backwards.
+        - Slice layers, names, wiring accordingly.
+        - Enforce that L0 boundary remains identical before/after.
         """
         if not self.layers:
             raise RuntimeError("Cannot prune an unfitted model")
 
-        # L0 must be immutable
+        # Enforce L0 invariance before any mutation
         if self.layer_feature_names and self.layer_feature_names[0] != self.input_names:
             raise RuntimeError("L0 boundary changed — inputs must be immutable.")
-
-        # Sync wiring to any node-side simplification
-        if hasattr(self, "refresh_wiring_from_nodes"):
-            self.refresh_wiring_from_nodes()
 
         n_layers = len(self.layers)
         if verbose:
             print("Before pruning:", [len(L) for L in self.layers])
 
-        # Backward reachability: which nodes to keep per layer
-        keep = [set() for _ in range(n_layers)]
+        # Ensure wiring reflects CURRENT node deps
+        self.refresh_wiring_from_nodes()
+
+        keep: List[set[int]] = [set() for _ in range(n_layers)]
         keep[-1] = set(range(len(self.layers[-1])))
+
+        # backward reachability via indices
         for li in range(n_layers - 1, 0, -1):
             for j in keep[li]:
                 for p in self.wiring_indices[li + 1][j]:
                     keep[li - 1].add(int(p))
 
-        # Slice each layer and boundary; remap next layer's survivor parents
+        # slice in lockstep
         for li in range(n_layers):
             survivors = sorted(keep[li])
             if not survivors:
                 raise RuntimeError(f"Pruning resulted in empty layer {li}")
-
-            bi = li + 1  # boundary after layer li
-
-            # Build old->new map for this boundary (bi)
-            old_len = len(self.layer_feature_names[bi])
-            remap = np.full(old_len, -1, dtype=int)
-            remap[np.asarray(survivors, dtype=int)] = np.arange(len(survivors), dtype=int)
-
-            # 1) prune nodes at layer li
             self.layers[li] = [self.layers[li][s] for s in survivors]
+            self.layer_feature_names[li + 1] = [self.layer_feature_names[li + 1][s] for s in survivors]
+            if li + 1 < len(self.wiring_indices):
+                self.wiring_indices[li + 1] = [self.wiring_indices[li + 1][s] for s in survivors]
 
-            # 2) prune names at boundary bi
-            self.layer_feature_names[bi] = [self.layer_feature_names[bi][s] for s in survivors]
-
-            # 3) prune wiring for THIS boundary (parents of layer li nodes)
-            if bi < len(self.wiring_indices):
-                self.wiring_indices[bi] = [self.wiring_indices[bi][s] for s in survivors]
-
-            # 4) REMAP parents of the NEXT layer's SURVIVORS to the compacted boundary
-            bi_next = li + 2
-            if bi_next < len(self.wiring_indices) and (li + 1) < n_layers:
-                survivors_next = sorted(keep[li + 1])
-                remapped_next = []
-                for j, arr in enumerate(self.wiring_indices[bi_next]):
-                    if j not in survivors_next:
-                        # This node will be pruned later; leave as-is to avoid false -1s.
-                        remapped_next.append(arr)
-                        continue
-                    arr = np.asarray(arr, dtype=int)
-                    new_arr = remap[arr]
-                    if (new_arr < 0).any():
-                        # Should never happen for survivors_next by construction
-                        raise RuntimeError(
-                            f"Dangling dependency into pruned boundary L{li+1}: "
-                            f"{arr.tolist()} -> {new_arr.tolist()}"
-                        )
-                    remapped_next.append(new_arr.astype(int))
-                self.wiring_indices[bi_next] = remapped_next
-
-        # Update counts
+        # update counts
         self.layer_node_counts = [len(L) for L in self.layers]
 
-        # L0 still identical?
+        # Re-enforce L0 invariance after mutations
         if self.layer_feature_names[0] != self.input_names:
             raise RuntimeError("L0 boundary changed during pruning — this is a bug.")
 
         if verbose:
             print("After pruning: ", [len(L) for L in self.layers])
         return self
-
-
