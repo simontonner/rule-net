@@ -1,3 +1,7 @@
+# deep_binary_classifier.py
+# Name-based wiring with strict L0 invariants and robust pruning.
+# Internally we store only INDICES for wiring; names exist for BinaryNode ctor & display.
+
 from __future__ import annotations
 from typing import Sequence, Callable, List
 from abc import ABC, abstractmethod
@@ -7,82 +11,58 @@ from concurrent.futures import ProcessPoolExecutor
 from architecture_yfinal.utils import truth_table_indices, truth_table_patterns
 
 
-# ---------- Base Node ----------
 class BinaryNode(ABC):
     def __init__(self, node_name: str, input_names: list[str]):
-        self.node_name = node_name
+        self.name = node_name
         self.input_names = input_names
-        self.node_predictions: np.ndarray | None = None
+        self.node_predictions = None
+        """
+        Base class for all nodes in the network.
+        """
 
     def __call__(self, input_values: np.ndarray) -> np.ndarray:
-        """
-        Return predictions for the given inputs.
-
-        :param input_values: (N, num_bits) boolean array
-        :return: (N,) boolean array
-        """
         if self.node_predictions is None:
-            raise AttributeError(f"Node {self.node_name} must set self.node_predictions during initialization.")
-        if input_values.dtype != bool:
-            raise TypeError(f"Node {self.node_name} expects boolean inputs")
-        k = len(self.input_names)
-        if input_values.shape[1] != k:
-            raise ValueError(f"Node {self.node_name} expects {k} inputs, got {input_values.shape[1]}")
-        if self.node_predictions.shape[0] != (1 << k):
-            raise ValueError(
-                f"Node {self.node_name}: node_predictions length {self.node_predictions.shape[0]} "
-                f"does not match 2**{k}={1<<k}"
-            )
-        idx = truth_table_indices(input_values)
-        return self.node_predictions[idx]
+            raise AttributeError(f"Node {self.name} needs to populate self.node_predictions during initialization.")
+        if input_values.shape[1] != len(self.input_names):
+            raise ValueError(f"Node {self.name} accepts only inputs of length {len(self.input_names)}")
+        return self.node_predictions[truth_table_indices(input_values)]
 
     def get_truth_table(self):
-        """Return full truth table (patterns + predictions)."""
         if self.node_predictions is None:
-            raise AttributeError(f"Node {self.node_name} must set self.node_predictions during initialization.")
-        k = len(self.input_names)
-        patterns = truth_table_patterns(k)
+            raise AttributeError(f"Node {self.name} needs to populate self.node_predictions during initialization.")
+        patterns = truth_table_patterns(len(self.input_names))
         table = np.column_stack((patterns, self.node_predictions))
-        column_names = self.input_names + [f"{self.node_name} (output)"]
+        column_names = self.input_names + [f"{self.name} (output)"]
         return table, column_names
 
     @abstractmethod
     def get_metadata(self) -> dict:
-        """Return metadata specific to the node type."""
         ...
 
 
-# ---------- Top-level worker (picklable) ----------
-def _build_node_worker(
-        node_factory: Callable[..., "BinaryNode"],
-        node_name: str,
-        feature_names: list[str],
-        feature_values: np.ndarray,   # (N, bits) ordered by feature_names
-        target_values: np.ndarray,    # (N,)
-        seed: int,
-) -> "BinaryNode":
-    return node_factory(node_name, feature_names, feature_values, target_values, seed)
-
-
-# ---------- DeepBinaryClassifier ----------
 class DeepBinaryClassifier:
+    """
+    Boolean network of BinaryNodes.
+    - Train nodes on sampled parent subsets.
+    - After node builds (and possibly simplifies), derive wiring INDICES from node.input_names.
+    - Use those indices for forward passes and pruning.
+    """
+
     def __init__(
             self,
             layer_node_counts: Sequence[int],
             layer_bit_counts: Sequence[int],
-            node_factory: Callable[..., BinaryNode],
+            node_factory: Callable[..., "BinaryNode"],  # (name, input_names, X_subset, y, seed) -> BinaryNode
             seed: int | None = None,
             jobs: int | None = None,
     ):
         if len(layer_node_counts) != len(layer_bit_counts):
-            raise ValueError("Both layer_node_counts and layer_bit_counts must specify one value per layer")
+            raise ValueError("layer_node_counts and layer_bit_counts must have equal length")
 
         for i in range(1, len(layer_node_counts)):
-            bits = layer_bit_counts[i]
-            prev = layer_node_counts[i - 1]
-            if bits > prev:
+            if layer_bit_counts[i] > layer_node_counts[i - 1]:
                 raise ValueError(
-                    f"Layer {i} is trying to choose {bits} bits but only {prev} outputs available from layer {i-1}"
+                    f"Layer {i}: needs {layer_bit_counts[i]} bits but prev layer has {layer_node_counts[i-1]}"
                 )
 
         self.layer_node_counts = list(layer_node_counts)
@@ -92,173 +72,183 @@ class DeepBinaryClassifier:
         self.jobs = jobs
 
         # trained artifacts
-        self.layers: List[List[BinaryNode]] = []         # layers[li] is list of nodes in layer li (0-based)
-        self.layer_feature_names: List[List[str]] = []   # boundary names
-        self.wiring_names: List[List[List[str]]] = []    # wiring per boundary
-        self.wiring_indices: List[List[np.ndarray]] = [] # cached int indices
-        self.input_names: list[str] = []                 # freeze L0 inputs
+        self.layers: List[List["BinaryNode"]] = []
+        self.wiring_indices: List[List[np.ndarray]] = []   # parents per node at boundary bi = li+1
+        self.layer_feature_names: List[List[str]] = []     # names per boundary (for ctor/display)
+        self.input_dim: int | None = None
+        self.input_names: List[str] = []
 
     # ---------- internals ----------
-    def _name_to_idx(self, names: List[str]) -> dict[str, int]:
-        return {nm: i for i, nm in enumerate(names)}
-
-    def _rebuild_indices_for_boundary(self, bi: int) -> None:
-        if bi == 0:
-            return
-        prev_names = self.layer_feature_names[bi - 1]
-        prev_map = self._name_to_idx(prev_names)
-        idxs: List[np.ndarray] = []
-        for fnames in self.wiring_names[bi]:
-            idxs.append(np.array([prev_map[n] for n in fnames], dtype=int))
-        self.wiring_indices[bi] = idxs
-
     def _build_layer(
             self,
             X_layer: np.ndarray,
             y: np.ndarray,
+            prev_names: List[str],
             layer_idx: int,
-            layer_node_count: int,
-            layer_bit_count: int,
+            node_count: int,
+            bit_count: int,
             jobs: int | None,
-    ) -> tuple[List[BinaryNode], List[List[str]]]:
-        node_seeds = self._rng.integers(0, 2**32 - 1, size=layer_node_count, dtype=np.uint64)
-        prev_names = self.layer_feature_names[layer_idx]
+    ) -> tuple[List["BinaryNode"], List[np.ndarray], List[str]]:
+        seeds = self._rng.integers(0, 2**32 - 1, size=node_count, dtype=np.uint64)
 
-        chosen_parent_indices = [
-            np.sort(self._rng.choice(len(prev_names), size=layer_bit_count, replace=False))
-            for _ in range(layer_node_count)
+        # Sample parents for training data (sorted for deterministic column order)
+        sampled_cols_list = [
+            np.sort(self._rng.choice(len(prev_names), size=bit_count, replace=False))
+            for _ in range(node_count)
         ]
 
+        # Build nodes (no nested callables to avoid pickle issues)
         if jobs in (None, 1):
-            nodes: List[BinaryNode] = []
-            wiring_names_bi: List[List[str]] = []
-            for node_idx, node_seed in enumerate(node_seeds):
-                cols = chosen_parent_indices[node_idx]
+            nodes: List["BinaryNode"] = []
+            for node_idx, (cols, s) in enumerate(zip(sampled_cols_list, seeds)):
                 node_name = f"L{layer_idx+1}N{node_idx}"
                 parent_names = [prev_names[i] for i in cols]
-                feature_values = X_layer[:, cols]
-                node = self.node_factory(node_name, parent_names, feature_values, y, int(node_seed))
+                X_subset = X_layer[:, cols]
+                nodes.append(self.node_factory(node_name, parent_names, X_subset, y, int(s)))
+        else:
+            with ProcessPoolExecutor(jobs) as ex:
+                futures = []
+                for node_idx, (cols, s) in enumerate(zip(sampled_cols_list, seeds)):
+                    node_name = f"L{layer_idx+1}N{node_idx}"
+                    parent_names = [prev_names[i] for i in cols]
+                    X_subset = X_layer[:, cols]
+                    futures.append(ex.submit(self.node_factory, node_name, parent_names, X_subset, y, int(s)))
+                nodes = [f.result() for f in futures]
 
-                node_deps = list(node.input_names)
-                missing = [n for n in node_deps if n not in parent_names]
-                if missing:
-                    raise ValueError(
-                        f"{node_name}: node.input_names contains names not in parent set: {missing}. "
-                        f"Parent set: {parent_names}"
-                    )
-                wiring_names_bi.append(node_deps)
-                nodes.append(node)
-            return nodes, wiring_names_bi
-
-        with ProcessPoolExecutor(self.jobs) as ex:
-            futures = []
-            parent_name_choices = []
-            for node_idx, node_seed in enumerate(node_seeds):
-                cols = chosen_parent_indices[node_idx]
-                node_name = f"L{layer_idx+1}N{node_idx}"
-                parent_names = [prev_names[i] for i in cols]
-                parent_name_choices.append(parent_names)
-                feature_values = X_layer[:, cols]
-                futures.append(
-                    ex.submit(
-                        _build_node_worker,
-                        self.node_factory,
-                        node_name,
-                        parent_names,
-                        feature_values,
-                        y,
-                        int(node_seed),
-                    )
+        # After node may simplify/reorder deps, build ACTUAL wiring indices from node.input_names.
+        prev_map = {nm: i for i, nm in enumerate(prev_names)}
+        idxs_list: List[np.ndarray] = []
+        for node in nodes:
+            deps = list(node.input_names)
+            missing = [nm for nm in deps if nm not in prev_map]
+            if missing:
+                raise ValueError(
+                    f"{node.name}: input_names not in previous boundary: {missing}. "
+                    f"Prev boundary: {prev_names}"
                 )
-            nodes = [f.result() for f in futures]
-            wiring_names_bi = []
-            for node, parent_names in zip(nodes, parent_name_choices):
-                node_deps = list(node.input_names)
-                missing = [n for n in node_deps if n not in parent_names]
-                if missing:
-                    raise ValueError(
-                        f"{node.node_name}: node.input_names contains names not in parent set: {missing}. "
-                        f"Parent set: {parent_names}"
-                    )
-                wiring_names_bi.append(node_deps)
-            return nodes, wiring_names_bi
+            idxs = np.array([prev_map[nm] for nm in deps], dtype=int)
+            idxs_list.append(idxs)
+
+        new_names = [n.name for n in nodes]
+        return nodes, idxs_list, new_names
 
     # ---------- public ----------
     def fit(self, X: np.ndarray, y: np.ndarray) -> "DeepBinaryClassifier":
         if X.dtype != bool or y.dtype != bool:
             raise TypeError("X and y must be boolean arrays")
-
         self.input_dim = X.shape[1]
-        self.layers.clear()
-        self.wiring_names.clear()
-        self.wiring_indices.clear()
 
-        # boundary 0 = inputs
-        self.layer_feature_names = [[f"L0N{i}" for i in range(self.input_dim)]]
-        self.input_names = list(self.layer_feature_names[0])
-        self.wiring_names.append([])
-        self.wiring_indices.append([])
+        self.layers.clear()
+        self.wiring_indices.clear()
+        self.layer_feature_names.clear()
+
+        # boundary 0 = input names
+        self.input_names = [f"L0N{i}" for i in range(self.input_dim)]
+        self.layer_feature_names.append(self.input_names)
+        self.wiring_indices.append([])  # no wiring at L0
 
         X_layer = X
-        for li, (layer_node_count, layer_bit_count) in enumerate(
-                zip(self.layer_node_counts, self.layer_bit_counts)
-        ):
-            nodes, wiring_names_bi = self._build_layer(
-                X_layer, y, li, layer_node_count, layer_bit_count, self.jobs
+        for li, (node_cnt, bit_cnt) in enumerate(zip(self.layer_node_counts, self.layer_bit_counts)):
+            prev_names = self.layer_feature_names[li]
+            nodes, idxs_list, new_names = self._build_layer(
+                X_layer, y, prev_names, li, node_cnt, bit_cnt, self.jobs
             )
             self.layers.append(nodes)
-            self.wiring_names.append(wiring_names_bi)
+            self.wiring_indices.append(idxs_list)
+            self.layer_feature_names.append(new_names)
 
-            prev_map = self._name_to_idx(self.layer_feature_names[li])
-            idxs = [
-                np.array([prev_map[n] for n in nodes[j].input_names], dtype=int)
-                for j in range(len(nodes))
-            ]
-            self.wiring_indices.append(idxs)
-
-            outs = [nodes[j](X_layer[:, idxs[j]]) for j in range(len(nodes))]
-            X_layer = np.column_stack(outs)
-            self.layer_feature_names.append([node.node_name for node in nodes])
+            # forward using ACTUAL deps
+            outs = [n(X_layer[:, idxs]) for n, idxs in zip(nodes, idxs_list)]
+            X_layer = np.column_stack(outs) if len(outs) > 1 else outs[0].reshape(-1, 1)
 
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         if X.dtype != bool:
             raise TypeError("X must be a boolean array")
+        if not self.layers:
+            raise RuntimeError("Model not fitted")
 
         X_layer = X
-        for bi in range(1, len(self.layer_feature_names)):
-            li = bi - 1
-            nodes = self.layers[li]
-            idxs_list = self.wiring_indices[bi]
-            outs = [nodes[j](X_layer[:, idxs_list[j]]) for j in range(len(nodes))]
-            X_layer = np.column_stack(outs)
+        for li, nodes in enumerate(self.layers):
+            idxs_list = self.wiring_indices[li + 1]
+            outs = [n(X_layer[:, idxs]) for n, idxs in zip(nodes, idxs_list)]
+            X_layer = np.column_stack(outs) if len(outs) > 1 else outs[0].reshape(-1, 1)
 
-        # enforce single output
-        if X_layer.ndim != 2 or X_layer.shape[1] != 1:
+        if X_layer.shape[1] != 1:
             raise ValueError(
-                f"Final layer produced {X_layer.shape[1]} outputs; expected exactly 1. "
-                "Check layer_node_counts (last should be 1)."
+                f"Final layer produced {X_layer.shape[1]} outputs; expected 1. "
+                "Set last layer_node_counts[-1] = 1."
             )
         return X_layer[:, 0]
 
     def refresh_wiring_from_nodes(self) -> None:
-        """Resync wiring_names to each node's current feature_names and rebuild indices."""
+        """Resync wiring_indices from node.input_names (e.g., after internal simplification)."""
         for bi in range(1, len(self.layer_feature_names)):
-            li = bi - 1
-            if li >= len(self.layers):
-                break
-            prev_set = set(self.layer_feature_names[bi - 1])
-            nodes = self.layers[li]
-            deps_list = []
+            prev_names = self.layer_feature_names[bi - 1]
+            prev_map = {nm: i for i, nm in enumerate(prev_names)}
+            nodes = self.layers[bi - 1]
+            idxs_list: List[np.ndarray] = []
             for n in nodes:
                 deps = list(n.input_names)
-                missing = [nm for nm in deps if nm not in prev_set]
+                missing = [nm for nm in deps if nm not in prev_map]
                 if missing:
                     raise ValueError(
-                        f"{n.node_name}: input_names not in previous boundary: {missing}. "
-                        f"Prev boundary: {sorted(prev_set)}"
+                        f"{n.name}: input_names not in previous boundary: {missing}. "
+                        f"Prev boundary: {prev_names}"
                     )
-                deps_list.append(deps)
-            self.wiring_names[bi] = deps_list
-            self._rebuild_indices_for_boundary(bi)
+                idxs = np.array([prev_map[nm] for nm in deps], dtype=int)
+                idxs_list.append(idxs)
+            self.wiring_indices[bi] = idxs_list
+
+    def prune(self, verbose: bool = True) -> "DeepBinaryClassifier":
+        """
+        Index-based pruning with strict L0 invariants.
+        - Seed with all final-layer nodes.
+        - Walk wiring_indices backwards.
+        - Slice layers, names, wiring accordingly.
+        - Enforce that L0 boundary remains identical before/after.
+        """
+        if not self.layers:
+            raise RuntimeError("Cannot prune an unfitted model")
+
+        # Enforce L0 invariance before any mutation
+        if self.layer_feature_names and self.layer_feature_names[0] != self.input_names:
+            raise RuntimeError("L0 boundary changed — inputs must be immutable.")
+
+        n_layers = len(self.layers)
+        if verbose:
+            print("Before pruning:", [len(L) for L in self.layers])
+
+        # Ensure wiring reflects CURRENT node deps
+        self.refresh_wiring_from_nodes()
+
+        keep: List[set[int]] = [set() for _ in range(n_layers)]
+        keep[-1] = set(range(len(self.layers[-1])))
+
+        # backward reachability via indices
+        for li in range(n_layers - 1, 0, -1):
+            for j in keep[li]:
+                for p in self.wiring_indices[li + 1][j]:
+                    keep[li - 1].add(int(p))
+
+        # slice in lockstep
+        for li in range(n_layers):
+            survivors = sorted(keep[li])
+            if not survivors:
+                raise RuntimeError(f"Pruning resulted in empty layer {li}")
+            self.layers[li] = [self.layers[li][s] for s in survivors]
+            self.layer_feature_names[li + 1] = [self.layer_feature_names[li + 1][s] for s in survivors]
+            if li + 1 < len(self.wiring_indices):
+                self.wiring_indices[li + 1] = [self.wiring_indices[li + 1][s] for s in survivors]
+
+        # update counts
+        self.layer_node_counts = [len(L) for L in self.layers]
+
+        # Re-enforce L0 invariance after mutations
+        if self.layer_feature_names[0] != self.input_names:
+            raise RuntimeError("L0 boundary changed during pruning — this is a bug.")
+
+        if verbose:
+            print("After pruning: ", [len(L) for L in self.layers])
+        return self
