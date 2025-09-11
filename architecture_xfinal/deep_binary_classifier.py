@@ -222,7 +222,7 @@ class DeepBinaryClassifier:
             X_layer = np.column_stack(outs)
 
             # Next boundary names are these node names
-            self.layer_feature_names.append([node.name for node in nodes])
+            self.layer_feature_names.append([node.node_name for node in nodes])
 
         return self
 
