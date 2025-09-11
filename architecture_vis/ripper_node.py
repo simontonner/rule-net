@@ -5,8 +5,8 @@ import wittgenstein as lw
 from sympy import symbols, lambdify
 from sympy.logic.boolalg import Or, And, Not, false, simplify_logic
 
-from architecture_yfinal.deep_binary_classifier import BinaryNode
-from architecture_yfinal.utils import truth_table_patterns
+from architecture_vis.deep_binary_classifier import BinaryNode
+from architecture_vis.utils import truth_table_patterns
 
 
 class RipperNode(BinaryNode):
