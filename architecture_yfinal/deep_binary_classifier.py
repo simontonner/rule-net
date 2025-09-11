@@ -15,35 +15,67 @@ from abc import ABC, abstractmethod
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 
+from architecture_yfinal.utils import truth_table_indices, truth_table_patterns
 
-# ---------- BaseNode: names only ----------
-class BaseNode(ABC):
-    def __init__(self, name: str, feature_names: list[str]):
-        self.name = name
-        self.feature_names = list(feature_names)
+
+class BinaryNode(ABC):
+    def __init__(self, node_name: str, input_names: list[str]):
+        self.name = node_name
+        self.input_names = input_names
+
+        self.node_predictions = None
+
         """
-        Nodes know ONLY: their name and upstream feature names (strings).
-        __call__(X_local) receives columns ordered exactly as self.feature_names.
+        Base class for all nodes in the network.
+              
+        :param node_name: The name of this node.
+        :param input_names: The names of the input values (features).        
+        
+        :remarks:
+            The node_name and input_names are used for wiring up the network graph.
         """
+
+    def __call__(self, input_values: np.ndarray) -> np.ndarray:
+        """
+        Returns predictions for the given input vales.
+
+        :param input_values: The input values, shape (N, num_bits)
+        :return: The predictions, shape (N,)
+        """
+        if self.node_predictions is None:
+            raise AttributeError(f"Node {self.name} needs to populate self.node_predictions during initialization.")
+
+        if input_values.shape[1] != len(self.input_names):
+            raise ValueError(f"Node {self.name} accepts only inputs of length {len(self.input_names)}")
+
+        return self.node_predictions[truth_table_indices(input_values)]
+
+    def get_truth_table(self):
+        """Return full truth table (patterns + predictions)."""
+        if self.node_predictions is None:
+            raise AttributeError(f"Node {self.name} needs to populate self.node_predictions during initialization.")
+
+        patterns = truth_table_patterns(len(self.input_names))
+        table = np.column_stack((patterns, self.node_predictions))
+        column_names = self.input_names + [f"{self.name} (output)"]
+        return table, column_names
 
     @abstractmethod
-    def __call__(self, X_local: np.ndarray) -> np.ndarray:
-        """
-        Predict for this node given X_local aligned to self.feature_names.
-        Return: (N,), dtype=bool
-        """
+    def get_metadata(self) -> dict:
+        """Return metadata specific to the node type."""
         ...
+
 
 
 # ---------- Top-level worker (picklable) ----------
 def _build_node_worker(
-        node_factory: Callable[..., "BaseNode"],
+        node_factory: Callable[..., "BinaryNode"],
         node_name: str,
         feature_names: list[str],
         feature_values: np.ndarray,   # (N, bits) ordered by feature_names
         target_values: np.ndarray,    # (N,)
         seed: int,
-) -> "BaseNode":
+) -> "BinaryNode":
     return node_factory(node_name, feature_names, feature_values, target_values, seed)
 
 
@@ -53,7 +85,7 @@ class DeepBinaryClassifier:
             self,
             layer_node_counts: Sequence[int],
             layer_bit_counts: Sequence[int],
-            node_factory: Callable[..., BaseNode],
+            node_factory: Callable[..., BinaryNode],
             seed: int | None = None,
             jobs: int | None = None,
     ):
@@ -75,7 +107,7 @@ class DeepBinaryClassifier:
         self.jobs = jobs
 
         # trained artifacts
-        self.layers: List[List[BaseNode]] = []         # layers[li] is list of nodes in layer li (0-based)
+        self.layers: List[List[BinaryNode]] = []         # layers[li] is list of nodes in layer li (0-based)
         # boundary names (length = n_layers + 1)
         self.layer_feature_names: List[List[str]] = []  # layer_feature_names[0] -> L0N*, [k] -> names in layer k (1-based)
         # wiring per boundary (length mirrors layer_feature_names)
@@ -112,7 +144,7 @@ class DeepBinaryClassifier:
             layer_node_count: int,
             layer_bit_count: int,
             jobs: int | None,
-    ) -> tuple[List[BaseNode], List[List[str]]]:
+    ) -> tuple[List[BinaryNode], List[List[str]]]:
         """
         Returns:
           nodes: nodes built for layer li
@@ -127,7 +159,7 @@ class DeepBinaryClassifier:
         ]
 
         if jobs in (None, 1):
-            nodes: List[BaseNode] = []
+            nodes: List[BinaryNode] = []
             wiring_names_bi: List[List[str]] = []
             for node_idx, node_seed in enumerate(node_seeds):
                 cols = chosen_parent_indices[node_idx]
@@ -137,7 +169,7 @@ class DeepBinaryClassifier:
                 node = self.node_factory(node_name, parent_names, feature_values, y, int(node_seed))
 
                 # Node may have reduced/reordered its deps; ensure they are subset of parent_names
-                node_deps = list(node.feature_names)
+                node_deps = list(node.input_names)
                 missing = [n for n in node_deps if n not in parent_names]
                 if missing:
                     raise ValueError(
@@ -172,7 +204,7 @@ class DeepBinaryClassifier:
             nodes = [f.result() for f in futures]
             wiring_names_bi = []
             for node, parent_names in zip(nodes, parent_name_choices):
-                node_deps = list(node.feature_names)
+                node_deps = list(node.input_names)
                 missing = [n for n in node_deps if n not in parent_names]
                 if missing:
                     raise ValueError(
@@ -255,7 +287,7 @@ class DeepBinaryClassifier:
             prev_set = set(self.layer_feature_names[bi - 1])
             deps_list = []
             for n in nodes:
-                deps = list(n.feature_names)
+                deps = list(n.input_names)
                 missing = [nm for nm in deps if nm not in prev_set]
                 if missing:
                     raise ValueError(
