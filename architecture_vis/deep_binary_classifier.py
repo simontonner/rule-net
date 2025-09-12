@@ -1,39 +1,8 @@
 from __future__ import annotations
 from typing import Sequence, Callable, List
-from abc import ABC, abstractmethod
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
-
-from architecture_vis.utils import truth_table_indices, truth_table_patterns
-
-
-class BinaryNode(ABC):
-    def __init__(self, node_name: str, input_names: list[str]):
-        self.name = node_name
-        self.input_names = input_names
-        self.node_predictions = None
-        """
-        Base class for all nodes in the network.
-        """
-
-    def __call__(self, input_values: np.ndarray) -> np.ndarray:
-        if self.node_predictions is None:
-            raise AttributeError(f"Node {self.name} needs to populate self.node_predictions during initialization.")
-        if input_values.shape[1] != len(self.input_names):
-            raise ValueError(f"Node {self.name} accepts only inputs of length {len(self.input_names)}")
-        return self.node_predictions[truth_table_indices(input_values)]
-
-    def get_truth_table(self):
-        if self.node_predictions is None:
-            raise AttributeError(f"Node {self.name} needs to populate self.node_predictions during initialization.")
-        patterns = truth_table_patterns(len(self.input_names))
-        table = np.column_stack((patterns, self.node_predictions))
-        column_names = self.input_names + [f"{self.name} (output)"]
-        return table, column_names
-
-    @abstractmethod
-    def get_metadata(self) -> dict:
-        ...
+from architecture_vis.nodes.base import BinaryNode
 
 
 class DeepBinaryClassifier:
@@ -115,14 +84,14 @@ class DeepBinaryClassifier:
                 input_names = [prev_node_names[b] for b in node_backlinks]
                 input_values = layer_input_values[:, node_backlinks]
                 node_name = f"L{layer_idx+1}N{node_idx}"
-                futures.append(ex.submit(self.node_factory, node_name, input_names, input_values, target_values, node_seed))
+                future = ex.submit(self.node_factory, node_name, input_names, input_values, target_values, node_seed)
+                futures.append(future)
 
             nodes = [f.result() for f in futures]
 
         backlinks = self._get_backlinks(prev_node_names, nodes)
         node_names = [n.name for n in nodes]
         return nodes, backlinks, node_names
-
 
     def fit(self, input_values: np.ndarray, target_values: np.ndarray) -> "DeepBinaryClassifier":
         if input_values.dtype != bool or target_values.dtype != bool:
@@ -163,63 +132,55 @@ class DeepBinaryClassifier:
         return self
 
     def predict(self, input_values: np.ndarray) -> np.ndarray:
-        if input_values.dtype != bool:
-            raise TypeError("input_values must be a boolean array")
         if not self.layers:
             raise RuntimeError("Model not fitted")
 
-        expected = len(self.node_names[0])
-        if input_values.shape[1] != expected:
-            raise ValueError(f"input_values has {input_values.shape[1]} columns - model expects {expected} L0 inputs")
+        if input_values.dtype != bool or input_values.shape[1] != len(self.node_names[0]):
+            raise ValueError(f"input_values must contain boolean arrays of length {len(self.node_names[0])}")
 
-        layer_inputs = input_values
-        for li, nodes in enumerate(self.layers):
-            idxs_list = self.backlinks[li + 1]
-            outs = [n(layer_inputs[:, idxs]) for n, idxs in zip(nodes, idxs_list)]
-            layer_inputs = np.column_stack(outs) if len(outs) > 1 else outs[0].reshape(-1, 1)
+        layer_input_values = input_values
+        for layer_idx, layer_nodes in enumerate(self.layers):
+            layer_backlinks = self.backlinks[layer_idx + 1]
 
-        if layer_inputs.shape[1] != 1:
-            raise ValueError(
-                f"Final layer produced {layer_inputs.shape[1]} outputs; expected 1. "
-                "Set last layer_node_counts[-1] = 1."
-            )
-        return layer_inputs[:, 0]
+            layer_output_values = np.empty((layer_input_values.shape[0], len(layer_backlinks)), dtype=bool)
+            for j, (node, node_backlinks) in enumerate(zip(layer_nodes, layer_backlinks)):
+                layer_output_values[:, j] = node(layer_input_values[:, node_backlinks])
+
+            layer_input_values = layer_output_values
+
+        return layer_input_values.flatten()
 
     def prune(self) -> "DeepBinaryClassifier":
         """
-        Index-based pruning; then rebuild all wiring in one pass.
-        L0 boundary is immutable by construction (tuple).
+        Prune unused nodes by backward reachability from the final layer.
+        Rebuilds backlinks afterward to stay consistent with node.input_names.
         """
         if not self.layers:
             raise RuntimeError("Cannot prune an unfitted model")
 
-        # Ensure wiring reflects current node.input_names
         self._rewire_net()
 
-        n_layers = len(self.layers)
+        # backtrack and note down reachable nodes
+        num_layers = len(self.layers)
+        reachable_nodes: List[set[int]] = [set() for _ in range(num_layers)]
+        reachable_nodes[-1] = set(range(len(self.layers[-1])))
 
-        # Backward reachability: which nodes to keep per layer
-        keep = [set() for _ in range(n_layers)]
-        keep[-1] = set(range(len(self.layers[-1])))
-        for li in range(n_layers - 1, 0, -1):
-            for j in keep[li]:
-                for p in self.backlinks[li + 1][j]:
-                    keep[li - 1].add(int(p))
+        for layer_idx in range(num_layers - 1, 0, -1):
+            layer_backlinks = self.backlinks[layer_idx + 1]
+            for node_idx in reachable_nodes[layer_idx]:
+                node_backlinks = layer_backlinks[node_idx]
+                reachable_nodes[layer_idx - 1].update(node_backlinks) # build up set from backlinks in layer
 
-        # Slice each layer and its outgoing boundary names
-        for li in range(n_layers):
-            survivors = sorted(keep[li])
-            if not survivors:
-                raise RuntimeError(f"Pruning resulted in empty layer {li}")
+        # update our layers and node names to only include reachable nodes
+        for layer_idx in range(num_layers):
+            reachable_layer_nodes = sorted(reachable_nodes[layer_idx])
+            if not reachable_layer_nodes:
+                raise RuntimeError(f"Pruning removed all nodes from layer {layer_idx}")
 
-            # prune nodes
-            self.layers[li] = [self.layers[li][s] for s in survivors]
+            self.layers[layer_idx] = [self.layers[layer_idx][ln] for ln in reachable_layer_nodes]
+            self.node_names[layer_idx + 1] = [self.node_names[layer_idx + 1][ln] for ln in reachable_layer_nodes]
 
-            # prune boundary names after this layer
-            bi = li + 1
-            self.node_names[bi] = [self.node_names[bi][s] for s in survivors]
-
-        # Rebuild wiring once from names -> indices
         self._rewire_net()
-
         return self
+
+
