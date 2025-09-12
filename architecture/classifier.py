@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Sequence, Callable, List
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
-from architecture_vis.nodes.base import BinaryNode
+from architecture.nodes.base import BinaryNode
 
 
 class DeepBinaryClassifier:
@@ -14,6 +14,18 @@ class DeepBinaryClassifier:
             seed: int | None = None,
             jobs: int | None = None,
     ):
+        """
+        A feed-forward Boolean network composed of layers of binary nodes.
+
+        Each node is constructed from randomly selected input bits and trained independently.
+        Layers are trained sequentially, and multiprocessing is optionally used for node training within each layer.
+
+        :param layer_node_counts: Number of nodes in each layer, shape (num_layers,)
+        :param layer_bit_counts: Number of input bits each node receives per layer, shape (num_layers,)
+        :param node_factory: Callable that builds a node from (name, input_names, input_values, target_values, seed)
+        :param seed: Master seed for RNG to ensure reproducibility
+        :param jobs: Number of worker processes to use; if None or 1, runs sequentially
+        """
         if len(layer_node_counts) != len(layer_bit_counts):
             raise ValueError("layer_node_counts and layer_bit_counts must have equal length")
 
@@ -94,6 +106,17 @@ class DeepBinaryClassifier:
         return nodes, backlinks, node_names
 
     def fit(self, input_values: np.ndarray, target_values: np.ndarray) -> "DeepBinaryClassifier":
+        """
+        Trains the network layer-by-layer on the provided boolean data.
+
+        Each node is trained independently on a random subset of input bits, and the outputs of one layer are used as
+        inputs to the next.
+
+        :param input_values: Boolean input values, shape (N, input_dim)
+        :param target_values: Boolean target labels, shape (N,)
+
+        :return: The fitted classifier
+        """
         if input_values.dtype != bool or target_values.dtype != bool:
             raise TypeError("input_values and target_values must be boolean arrays")
 
@@ -132,6 +155,13 @@ class DeepBinaryClassifier:
         return self
 
     def predict(self, input_values: np.ndarray) -> np.ndarray:
+        """
+        Performs a full forward pass through the network. All nodes are processed sequentially this time.
+
+        :param input_values: Boolean input values, shape (N, input_dim)
+
+        :return: Output of the final layer, flattened, shape (N,)
+        """
         if not self.layers:
             raise RuntimeError("Model not fitted")
 
@@ -150,10 +180,12 @@ class DeepBinaryClassifier:
 
         return layer_input_values.flatten()
 
-    def prune(self) -> "DeepBinaryClassifier":
+    def prune(self):
         """
-        Prune unused nodes by backward reachability from the final layer.
-        Rebuilds backlinks afterward to stay consistent with node.input_names.
+        Prune unused nodes by tracking backward checking reachability from each node.
+
+        Note: Pruned nodes are removed completely from the model to reduce its footprint. The nested list storing the
+        nodes is updated and also the backlinks are reindexed to reflect the new dependency structure of this list.
         """
         if not self.layers:
             raise RuntimeError("Cannot prune an unfitted model")
@@ -181,6 +213,6 @@ class DeepBinaryClassifier:
             self.node_names[layer_idx + 1] = [self.node_names[layer_idx + 1][ln] for ln in reachable_layer_nodes]
 
         self._rewire_net()
-        return self
+        return
 
 

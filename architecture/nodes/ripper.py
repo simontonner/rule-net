@@ -5,8 +5,8 @@ import wittgenstein as lw
 from sympy import symbols, lambdify
 from sympy.logic.boolalg import Or, And, Not, false, simplify_logic
 
-from architecture_vis.nodes.base import BinaryNode
-from architecture_vis.utils import truth_table_patterns
+from architecture.nodes.base import BinaryNode
+from architecture.utils import truth_table_patterns
 
 
 class RipperNode(BinaryNode):
@@ -93,4 +93,7 @@ def make_ripper_node(
         target_values: np.ndarray[np.bool_],
         seed: int,
 ) -> RipperNode:
+    """
+    Simple node factory to be handed over to the `DeepBinaryClassifier`.
+    """
     return RipperNode(node_name, input_names, input_values, target_values, seed)
