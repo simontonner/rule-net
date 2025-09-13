@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def truth_table_patterns(num_bits: int) -> np.ndarray:
+def truth_table_patterns(num_bits: int) -> np.ndarray[np.bool_]:
     """
     Generates bit-patterns like the inputs of a typical truth table.
 
@@ -13,7 +13,7 @@ def truth_table_patterns(num_bits: int) -> np.ndarray:
     return (row_indices & bit_weights) > 0
 
 
-def truth_table_indices(bit_patterns: np.ndarray) -> np.ndarray:
+def truth_table_indices(bit_patterns: np.ndarray) -> np.ndarray[np.int64]:
     """
     Converts bit patterns to their corresponding row indices in a typical truth table.
 
