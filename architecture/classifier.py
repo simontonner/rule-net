@@ -49,7 +49,7 @@ class DeepBinaryClassifier:
     def _get_backlinks(prev_node_names: Sequence[str], layer_nodes: Sequence["BinaryNode"]) -> List[List[int]]:
         prev_backlink_map = {prev_node_name: idx for idx, prev_node_name in enumerate(prev_node_names)}
 
-        layer_backlinks: List[List[int]] = []
+        layer_backlinks = []
         for node in layer_nodes:
             node_backlinks = [prev_backlink_map[prev_node_name] for prev_node_name in node.input_names]
             layer_backlinks.append(node_backlinks)
@@ -76,7 +76,7 @@ class DeepBinaryClassifier:
         node_seeds = self._rng.integers(0, 2**32 - 1, size=node_count, dtype=np.int64).tolist()
 
         if jobs in (None, 1):
-            nodes: List["BinaryNode"] = []
+            nodes = []
             for node_idx, node_seed in enumerate(node_seeds):
                 node_backlinks = np.sort(self._rng.choice(len(prev_node_names), size=bit_count, replace=False))
                 input_names = [prev_node_names[b] for b in node_backlinks]
@@ -194,7 +194,7 @@ class DeepBinaryClassifier:
 
         # backtrack and note down reachable nodes
         num_layers = len(self.layers)
-        reachable_nodes: List[set[int]] = [set() for _ in range(num_layers)]
+        reachable_nodes = [set() for _ in range(num_layers)]
         reachable_nodes[-1] = set(range(len(self.layers[-1])))
 
         for layer_idx in range(num_layers - 1, 0, -1):
