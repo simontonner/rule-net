@@ -30,7 +30,6 @@ class RipperNode(BinaryNode):
         :param seed: A random seed for reproducibility.
         """
         super().__init__(node_name, input_names)
-
         self.seed = seed
 
         ripper = lw.RIPPER(random_state=seed)
