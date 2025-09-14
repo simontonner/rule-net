@@ -43,7 +43,7 @@ class LutNode(BinaryNode):
         if zero_mask.any():
             votes[zero_mask] = rng.integers(0, 2, size=zero_mask.sum()) * 2 - 1
 
-        self.node_predictions = votes > 0  # bool array of length 2**num_bits
+        self.node_predictions = votes > 0
 
     def get_metadata(self) -> dict:
         return {"type": "lut", "seed": self.seed}
