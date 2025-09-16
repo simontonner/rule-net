@@ -178,30 +178,43 @@ class DeepBinaryClassifier:
 
             layer_input_values = layer_output_values
 
-        return layer_input_values.flatten()
+        if layer_input_values.shape[1] == 1:
+            return layer_input_values[:, 0]
 
-    def prune(self):
+        return layer_input_values
+
+    def prune(self, output_node_names: list[str] | None = None):
         """
-        Prune unused nodes by tracking backward checking reachability from each node.
+        Prune unused nodes by tracking backward reachability from selected output node(s).
 
         Note: Pruned nodes are removed completely from the model to reduce its footprint. The nested list storing the
         nodes is updated and also the backlinks are reindexed to reflect the new dependency structure of this list.
+
+        :param output_node_names: Specifies which output nodes to keep by name.
         """
         if not self.layers:
             raise RuntimeError("Cannot prune an unfitted model")
+
+        specified_output_node_names = set() if output_node_names is None else set(output_node_names)
+        known_output_node_names = set(self.node_names[-1])
+        node_name_to_idx = {n: i for i, n in enumerate(known_output_node_names)}
+
+        unknown_output_node_names = specified_output_node_names - known_output_node_names
+        if unknown_output_node_names:
+            raise ValueError(f"Unknown output node(s): {unknown_output_node_names}")
 
         self._rewire_net()
 
         # backtrack and note down reachable nodes
         num_layers = len(self.layers)
         reachable_nodes = [set() for _ in range(num_layers)]
-        reachable_nodes[-1] = set(range(len(self.layers[-1])))
+        reachable_nodes[-1] = {node_name_to_idx[nm] for nm in specified_output_node_names}
 
         for layer_idx in range(num_layers - 1, 0, -1):
             layer_backlinks = self.backlinks[layer_idx + 1]
             for node_idx in reachable_nodes[layer_idx]:
                 node_backlinks = layer_backlinks[node_idx]
-                reachable_nodes[layer_idx - 1].update(node_backlinks) # build up set from backlinks in layer
+                reachable_nodes[layer_idx - 1].update(node_backlinks)  # build up set from backlinks in layer
 
         # update our layers and node names to only include reachable nodes
         for layer_idx in range(num_layers):
@@ -213,6 +226,7 @@ class DeepBinaryClassifier:
             self.node_names[layer_idx + 1] = [self.node_names[layer_idx + 1][ln] for ln in reachable_layer_nodes]
 
         self._rewire_net()
-        return
+
+
 
 
