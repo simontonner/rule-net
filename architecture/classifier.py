@@ -195,20 +195,21 @@ class DeepBinaryClassifier:
         if not self.layers:
             raise RuntimeError("Cannot prune an unfitted model")
 
-        specified_output_node_names = set() if output_node_names is None else set(output_node_names)
-        known_output_node_names = set(self.node_names[-1])
-        node_name_to_idx = {n: i for i, n in enumerate(known_output_node_names)}
+        known_output_node_names = list(self.node_names[-1])
+        given_output_node_names = set(known_output_node_names) if output_node_names is None else set(output_node_names)
 
-        unknown_output_node_names = specified_output_node_names - known_output_node_names
+        unknown_output_node_names = given_output_node_names - set(known_output_node_names)
         if unknown_output_node_names:
             raise ValueError(f"Unknown output node(s): {unknown_output_node_names}")
+
+        node_name_to_idx = {n: i for i, n in enumerate(known_output_node_names)}
 
         self._rewire_net()
 
         # backtrack and note down reachable nodes
         num_layers = len(self.layers)
         reachable_nodes = [set() for _ in range(num_layers)]
-        reachable_nodes[-1] = {node_name_to_idx[nm] for nm in specified_output_node_names}
+        reachable_nodes[-1] = {node_name_to_idx[nm] for nm in given_output_node_names}
 
         for layer_idx in range(num_layers - 1, 0, -1):
             layer_backlinks = self.backlinks[layer_idx + 1]
@@ -226,7 +227,3 @@ class DeepBinaryClassifier:
             self.node_names[layer_idx + 1] = [self.node_names[layer_idx + 1][ln] for ln in reachable_layer_nodes]
 
         self._rewire_net()
-
-
-
-
