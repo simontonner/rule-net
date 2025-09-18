@@ -56,14 +56,21 @@ class RipperNode(BinaryNode):
         self.input_names = [nm for nm in self.input_names if nm in used_input_names]
 
         # the sympy expression is applied over the columns of a truth table
-        truth_table_columns = truth_table_patterns(len(self.input_names)).T
+        input_count = len(self.input_names)
+        truth_table_columns = truth_table_patterns(input_count).T
 
         # evaluate expression to get new truth table outputs
         expression_symbols = [symbols(nm) for nm in self.input_names]
         expression_function = lambdify(expression_symbols, self.expression, "numpy")
         expression_prediction = expression_function(*truth_table_columns)
 
-        self.node_predictions = np.asarray(expression_prediction, dtype=bool)
+        # ensure constant expressions (like True/False) expand into a full truth table of length 2**input_count
+        expression_prediction = np.asarray(expression_prediction, dtype=bool)
+        if expression_prediction.ndim == 0:
+            expression_prediction = np.repeat(expression_prediction, 1 << input_count)
+
+        self.node_predictions = expression_prediction
+
 
     @staticmethod
     def _ruleset_to_expression(ruleset):
