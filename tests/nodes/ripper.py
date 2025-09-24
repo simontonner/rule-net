@@ -1,3 +1,11 @@
+#################################################################################
+# Tests for the RIPPER node implementation.
+#
+# Some of these tests are inspired by quirks observed in the wittgenstein package.
+# See wittgenstein_quirks.md for more details.
+#################################################################################
+
+
 import warnings
 
 import numpy as np
