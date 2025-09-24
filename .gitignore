@@ -4,8 +4,5 @@
 # Jupyter Notebook checkpoints
 *.ipynb_checkpoints
 
-# exclude the raw mnsit files
+# exclude the raw mnist files
 **/data/mnist/*.gz
-
-# exclude unmodularized/data folder and subitems folders
-**/unmodularized/data/**
