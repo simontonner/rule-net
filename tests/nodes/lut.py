@@ -1,6 +1,4 @@
-# test_lut_node.py
 import numpy as np
-import pytest
 
 from architecture.nodes.lut import make_lut_node
 from architecture.utils import truth_table_patterns
