@@ -32,7 +32,6 @@ class LutNode(BinaryNode):
         if input_values.dtype != bool or target_values.dtype != bool:
             raise TypeError("input_values and target_values must be boolean arrays")
 
-
         # +1 vote for True, -1 for False
         target_plus_minus = target_values.astype(np.int8) * 2 - 1
         pattern_indices = truth_table_indices(input_values)
