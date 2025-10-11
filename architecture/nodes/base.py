@@ -20,8 +20,6 @@ class BinaryNode(ABC):
 
         self.node_predictions = None
 
-
-
     def __call__(self, input_values: np.ndarray) -> np.ndarray:
         """
         Returns predictions for the given input vales.
